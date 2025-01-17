@@ -1,0 +1,137 @@
+---
+- name: Базовая настройка сервера
+  hosts: all
+  become: yes
+  tasks:
+    
+    - name: Получить имя пользователя root из переменной окружения
+      set_fact:
+        root_user: "{{ lookup('env', 'ROOT_USER') | default('root') }}"
+
+    - name: Получить имя пользователя user из переменной окружения
+      set_fact:
+        user: "{{ lookup('env', 'USER') | default('user') }}"
+
+    - name: Обновить список пакетов
+      apt:
+        update_cache: yes
+
+    - name: Обновить все установленные пакеты
+      apt:
+        upgrade: dist
+    
+    - name: Устанавить утилиты
+      apt:
+        name:
+          - mc
+          - htop
+        state: present
+    
+    - name: Установить необходимые пакеты для Docker
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+
+    - name: Добавить GPG ключ Docker
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Добавить репозиторий Docker
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable"
+        state: present
+
+    - name: Установить Docker
+      apt:
+        name: docker-ce
+        state: present
+
+    - name: Установить Docker Compose
+      shell: |
+        curl -L https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+
+    - name: Создание пользователя {{ root_user }}
+      user:
+        name: "{{ root_user }}"
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Разрешить пользователю {{ root_user }} выполнять команды без пароля
+      lineinfile:
+        path: /etc/sudoers
+        line: "{{ root_user }} ALL=(ALL) NOPASSWD: ALL"
+        validate: 'visudo -cf %s'
+
+    - name: Создать папку .ssh, если её нет
+      file:
+        path: /home/{{ root_user }}/.ssh
+        state: directory
+        owner: "{{ root_user }}"
+        group: "{{ root_user }}"
+        mode: '0700'
+
+    - name: Добавить публичный SSH ключ в authorized_keys для {{ root_user }}
+      authorized_key:
+        user: "{{ root_user }}"
+        state: present
+        key: "{{ lookup('file', './id_rsa.pub') }}"
+
+    - name: Отключить доступ для пользователя root через SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin no'
+      notify:
+        - Перезапустить SSH
+
+    - name: Включить доступ по ключу и отключить пароль для SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+      notify:
+        - Перезапустить SSH
+    
+    - name: Отключить скрипты в /etc/update-motd.d
+      file:
+        path: "/etc/update-motd.d/{{ item }}"
+        state: absent
+      with_items:
+        - 00-header
+        - 10-help-text
+        - 50-motd-news
+        - 50-landscape-sysinfo
+        - 90-updates-available
+        - 91-release-upgrade
+        - 98-reboot-required
+        - 99-footer
+
+    - name: Создать пользователя {{ user }}
+      user:
+        name: "{{ user }}"
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Добавить пользователя {{ root_user }} в группу docker
+      user:
+        name: "{{ root_user }}"
+        groups: docker
+        append: yes
+
+    - name: Добавить пользователя {{ user }} в группу docker
+      user:
+        name: "{{ user }}"
+        groups: docker
+        append: yes
+
+  handlers:
+    - name: Перезапустить SSH
+      service:
+        name: ssh
+        state: restarted
