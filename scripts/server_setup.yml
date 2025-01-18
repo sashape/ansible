@@ -2,8 +2,9 @@
 - name: Базовая настройка сервера
   hosts: all
   become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
   tasks:
-    
     - name: Получить имя пользователя root из переменной окружения
       set_fact:
         root_user: "{{ lookup('env', 'ROOT_USER') | default('root') }}"
@@ -11,6 +12,14 @@
     - name: Получить имя пользователя user из переменной окружения
       set_fact:
         user: "{{ lookup('env', 'USER') | default('user') }}"
+
+    - name: Получить операционную систему
+      command: uname -s
+      register: uname_s
+
+    - name: Получить архитектуру
+      command: uname -m
+      register: uname_m
 
     - name: Обновить список пакетов
       apt:
@@ -20,7 +29,7 @@
       apt:
         upgrade: dist
     
-    - name: Устанавить утилиты
+    - name: Установить утилиты
       apt:
         name:
           - mc
@@ -52,9 +61,10 @@
         state: present
 
     - name: Установить Docker Compose
-      shell: |
-        curl -L https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
-        chmod +x /usr/local/bin/docker-compose
+      get_url:
+        url: "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-{{ uname_s.stdout }}-{{ uname_m.stdout }}"
+        dest: "/usr/local/bin/docker-compose"
+        mode: '0755'
 
     - name: Создание пользователя {{ root_user }}
       user:
@@ -76,11 +86,15 @@
         group: "{{ root_user }}"
         mode: '0700'
 
+    - name: Установить путь к приватному ключу
+      set_fact:
+        private_key_path: "../{{ lookup('env', 'PUBLIC_KEY_PATH') | default('keys/id_rsa') }}"
+
     - name: Добавить публичный SSH ключ в authorized_keys для {{ root_user }}
       authorized_key:
         user: "{{ root_user }}"
         state: present
-        key: "{{ lookup('file', './id_rsa.pub') }}"
+        key: "{{ lookup('file', private_key_path) }}"
 
     - name: Отключить доступ для пользователя root через SSH
       lineinfile:
